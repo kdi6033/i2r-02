@@ -3,10 +3,10 @@
 #include <WiFi.h>
 #include <FirebaseESP32.h>
 
-#define FIREBASE_HOST "plc-ce-lp9i-default-rtdb.firebaseio.com" //Without http:// or https:// schemes
-#define FIREBASE_AUTH "nVhEvx5LDclDAAgvaSfeoal2roCvkuwHxEjqpF7t"
-#define WIFI_SSID "405902-2.4G"
-#define WIFI_PASSWORD "k01033887147"
+#define FIREBASE_HOST "-rtdb.firebaseio.com" //Without http:// or https:// schemes
+#define FIREBASE_AUTH "al2roCvkuwHxEjqpF7t"
+#define WIFI_SSID ""
+#define WIFI_PASSWORD ""
 
 //Define FirebaseESP8266 data object
 FirebaseData firebaseData1;
