@@ -486,7 +486,7 @@ export class GlobalService {
         console.log("connect success MQTT");
         console.log("mqtt broker",this.wifi.mqttBroker);
         console.log("topic",this.wifi.outTopic);
-        // console.log("email",this.wifi.email);
+        console.log("email",this.wifi.email);
         this.wifi.isConnectedMqtt = true;
 
         // MQTT에 연결된 후에 구독 및 메시지 수신 리스너 설정
@@ -615,7 +615,7 @@ export class GlobalService {
   saveMqttBrokerToLocalStorage() {
     if (this.isLocalStorageAvailable()) {
       localStorage.setItem('mqttBroker', this.wifi.mqttBroker);
-      // localStorage.setItem('email', this.wifi.email);
+      localStorage.setItem('email', this.wifi.email);
       localStorage.setItem('outTopic', this.wifi.outTopic);
       localStorage.setItem('inTopic', this.wifi.inTopic);
     } else {
@@ -631,7 +631,7 @@ export class GlobalService {
       const inTopic = localStorage.getItem('inTopic');
 
       this.wifi.mqttBroker = mqttBroker ?? this.wifi.mqttBroker;
-      // this.wifi.email = email ?? this.wifi.email;
+      this.wifi.email = email ?? this.wifi.email;
       this.wifi.outTopic = outTopic ?? this.wifi.outTopic;
       this.wifi.inTopic = inTopic ?? this.wifi.inTopic;
     } else {
@@ -647,7 +647,7 @@ export class GlobalService {
       const inTopic = localStorage.getItem('inTopic');
 
       if (mqttBroker) this.wifi.mqttBroker = mqttBroker;
-      // if (email) this.wifi.email = email;
+      if (email) this.wifi.email = email;
       if (outTopic) this.wifi.outTopic = outTopic;
       if (inTopic) this.wifi.inTopic = inTopic;
     } else {
@@ -660,7 +660,7 @@ export class GlobalService {
   saveWifiSettingsToLocalStorage() {
     if (this.isLocalStorageAvailable()) {
       localStorage.setItem('mqttBroker', this.wifi.mqttBroker);
-      // localStorage.setItem('email', this.wifi.email);
+      localStorage.setItem('email', this.wifi.email);
       localStorage.setItem('outTopic', this.wifi.outTopic);
       localStorage.setItem('inTopic', this.wifi.inTopic);
     } else {
