@@ -238,8 +238,8 @@ void readBleMacAddress() {
   // MAC 주소를 모두 대문자로 변환합니다.
   dev.mac.toUpperCase();
   // MQTT 토픽 업데이트
-  sprintf(wifi.outTopic, "/%s/out", dev.mac.c_str());
-  sprintf(wifi.inTopic, "/%s/in", dev.mac.c_str());
+  sprintf(wifi.outTopic, "i2r/EasyPLC/%s/out", dev.mac.c_str());
+  sprintf(wifi.inTopic, "i2r/EasyPLC/%s/in", dev.mac.c_str());
   // 시리얼 모니터에 BLE MAC 주소와 MQTT 토픽을 출력합니다.
   Serial.print("BLE MAC Address: ");
   Serial.println(dev.mac);
@@ -440,7 +440,7 @@ void doTick() {
 
     if (!dev.strIn.equals(dev.strInPre)) {
       DynamicJsonDocument responseDoc(1024);
-      responseDoc["type"] = 3;
+      responseDoc["type"] = 2;
       responseDoc["email"] = wifi.email;
       responseDoc["mac"] = dev.mac;
       responseDoc["in"] = strIn;
