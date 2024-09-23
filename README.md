@@ -4,7 +4,7 @@ WiFi Bluetooth PLC (4채널 릴레이, , ESP32) KC인증
 
 # 사양
 - 정격전압 : 5V DC, 보드내에서는 5V로 설계했습니다.
-- 입력전압 : 7~26V DC Free Volt, 7~26V 사이 전압을 공급하면         레귤레이터에서 5V 로 전원을 공급합니다.
+- 입력전압 : 7V에서 26V DC Free Volt, 7V에서 26V 사이 전압을 공급하면         레귤레이터에서 5V 로 전원을 공급합니다.
 - 작동온도 : -40 ℃ - 85 ℃
 - 입력 : 4개, 접점만 연결되면 동작합니다. 별도의 전압을 인가하면 고장의 원인이 됩니다.
 - 출력 : 1개는 30A 250VAC/30VDC
@@ -19,8 +19,8 @@ WiFi Bluetooth PLC (4채널 릴레이, , ESP32) KC인증
 ![다운로드 QR코드](https://drive.google.com/uc?id=10pkyNTbp9vKg8EGv4bFPIv3Bg4Hw1s85) <br>
 
 스마트폰에 어플 설치와 와이파이 연결을 보여줍니다. 그림을 크릭하세요  
-[아두이노 소스프로그램 링크](https://github.com/kdi6033/i2r-03/tree/main/0%20Android%20App%20Program/board-i2r-03)  
-[스마트폰 ionic 소스프로그램 링크](https://github.com/kdi6033/i2r-03/tree/main/0%20Android%20App%20Program)  
+[아두이노 소스프로그램 링크](https://github.com/kdi6033/i2r-02/tree/main/0%20Source-Program-IoT/board-i2r-02)  
+[AWS 아두이노 소스프로그램 링크](https://github.com/kdi6033/i2r-02/tree/main/0%20Source-Program-IoT/board-i2r-02-aws)  
 [![21-3 안드로이드 어플 사용 블루투스 와이파이 MQTT 통신](https://img.youtube.com/vi/FT0muFM24xc/0.jpg)](https://youtu.be/FT0muFM24xc)
  1) 4채널 릴레이  
 4채널 릴레이가 탑재된 보드입니다. 릴레이 출력단에 A접점 B접점을 활용해 장치를 연결할 수 있습니다.
