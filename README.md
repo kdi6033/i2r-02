@@ -1,6 +1,6 @@
 # i2r-02
 WiFi Bluetooth PLC (4채널 릴레이, , ESP32) KC인증
-![i2r-02-포트설명](https://drive.google.com/uc?id=1JGUkbzkz4xsO_-nzenS6Kv9PnJQRW6eD)
+![i2r-02-포트설명](자료/i2r-02-1.png)
 
 # 사양
 - 정격전압 : 5V DC, 보드내에서는 5V로 설계했습니다.
