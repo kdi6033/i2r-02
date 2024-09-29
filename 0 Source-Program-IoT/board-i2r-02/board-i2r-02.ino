@@ -109,16 +109,7 @@ public:
   String firmwareFileName = "";  // 다운로드할 파일 이름 저장
 
   void download_program(String fileName);
-  void startDownloadFeedback();
-  void stopDownloadFeedback();
-  //void blinkLEDTask(void * parameter);
-  static void blinkLEDTask(void * parameter);  // 정적 멤버 함수로 변경
-  void saveUpdateState(String state);
-  String readUpdateState();
-  void deleteUpdateState();
-  void saveFirmwareFileName(String fileName);  // 파일 이름 저장 함수
-  String readFirmwareFileName();  // 저장된 파일 이름 불러오기
-  void deleteFirmwareFileName();  // 저장된 파일 이름 삭제
+  void blinkLed(int iteration);
 } tool;
 
 // Create an instance of the Data structure
@@ -322,16 +313,6 @@ void setup() {
     wifi.startupTime = millis();
     programStartTime = millis(); // Record program start time
     timeManager.setup();
-    // 이전에 중단된 다운로드가 있으면 다시 시도
-    if (SPIFFS.exists(tool.updateStateFile)) {
-      String updateState = tool.readUpdateState();
-      Serial.println("updateState: "+updateState);
-      if (updateState != "ok_progress") {
-        String fileName = tool.readFirmwareFileName();
-        Serial.println("이전 업데이트 중단됨, 다운로드 재시작...");
-        tool.download_program(fileName);  // 중단된 다운로드 재시작
-      }
-    }
   }
 
   // Load pin states from SPIFFS
@@ -1048,148 +1029,57 @@ void Device::checkFactoryDefault() {
 // httpsupdate()
 // 다운로드 함수 
 void Tool::download_program(String fileName) {
-  // fileName이 비어 있는지 확인
-  if (fileName.isEmpty()) {
-    Serial.println("파일 이름이 비어 있습니다. 다운로드를 중단합니다.");
-    return;  // 파일 이름이 없으면 바로 리턴
-  }
-
-  firmwareFileName = fileName;  // 파일 이름 저장
-  tool.saveFirmwareFileName(fileName);
-
-  // 무한 루프를 통해 HTTP_UPDATE_OK 될 때까지 반복
+  // 다운로드 시작 전에 LED 깜박이기
+  this->blinkLed(10);
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("다운로드 시작!");
-
     WiFiClientSecure clientSecure;
     clientSecure.setInsecure();  // 인증서 검증 무시
 
+    // Add optional callback notifiers
+    httpUpdate.onStart([]() {
+      Serial.println("Update Started");
+    });
+    httpUpdate.onEnd([]() {
+      Serial.println("Update Finished");
+      tool.blinkLed(30);
+    });
+    httpUpdate.onProgress([](int cur, int total) {
+      Serial.printf("Progress: %d%%\n", (cur * 100) / total);
+    });
+    httpUpdate.onError([](int error) {
+      Serial.printf("Update Error: %d\n", error);
+    });
+
     httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    String firmwareUrl = "https://github.com/kdi6033/download/raw/main/" + firmwareFileName;
-    Serial.println("download url: "+firmwareUrl);
-    this->saveUpdateState("in_progress");
-
-    // 다운로드 중 피드백 (LED 깜빡임 시작)
-    this->startDownloadFeedback();
-    // 다운로드 시도
-    t_httpUpdate_return ret = httpUpdate.update(clientSecure, firmwareUrl);
-    // 다운로드 피드백 중지
-    this->stopDownloadFeedback();
-
-    // 다운로드 결과 처리
+    String url = "https://github.com/kdi6033/download/raw/main/" + fileName;
+    Serial.println("Downloading from: " + url);
+    
+    // 서버에서 HTTP 응답 코드 확인 추가
+    t_httpUpdate_return ret = httpUpdate.update(clientSecure, url);
+    Serial.printf("HTTP Code: %d\n", clientSecure.connected() ? clientSecure.available() : -1);
+  
     switch (ret) {
       case HTTP_UPDATE_FAILED:
-        Serial.printf("HTTP_UPDATE_FAILED Error (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
-        this->saveUpdateState("failed");  // 실패 상태 기록
+        Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
         break;
 
       case HTTP_UPDATE_NO_UPDATES:
-        Serial.println("업데이트가 없습니다.");
-        //this->deleteUpdateState();  // 상태 파일 삭제
-        this->saveUpdateState("not_updateFile");
+        Serial.println("HTTP_UPDATE_NO_UPDATES");
         break;
 
       case HTTP_UPDATE_OK:
-        Serial.println("업데이트 성공! 장치를 재부팅합니다...");
-        //this->deleteUpdateState();  // 성공 시 상태 파일 삭제
-        this->saveUpdateState("ok_progress");
-        ESP.restart();  // 업데이트 성공 후 장치 재부팅
-        return;  // 정상적으로 리턴
-    }
-    // HTTP_가 되지 않으면UPDATE_OK 리셋을 수행
-    Serial.println("다운로드 실패, 5초 후 장치를 리셋합니다...");
-  } else {
-    Serial.println("WiFi 연결 실패. 다시 시도하십시오.");
-  }
-  delay(5000);  // 재부팅 전 5초 대기
-  ESP.restart();  // 실패 시 장치 리셋
-}
-
-void Tool::startDownloadFeedback() {
-  // LED 깜빡임 시작
-  Serial.println("Starting LED blink feedback");
-  xTaskCreate(
-    blinkLEDTask,   // 작업 함수
-    "LED Blink",    // 작업 이름
-    1000,           // 스택 크기
-    NULL,           // 작업 입력 매개변수
-    1,              // 우선순위
-    NULL            // 작업 핸들
-  );
-}
-
-void Tool::stopDownloadFeedback() {
-  // LED 끄기
-  Serial.println("Stopping LED blink feedback");
-  digitalWrite(ledPin, LOW);
-}
-
-void Tool::blinkLEDTask(void * parameter) {
-  // LED를 다운로드가 진행되는 동안 깜빡이게 함
-  while (WiFi.status() == WL_CONNECTED) {
-    digitalWrite(ledPin, HIGH);  // LED 켜기
-    delay(100);                  // 500ms 대기
-    digitalWrite(ledPin, LOW);   // LED 끄기
-    delay(100);                  // 500ms 대기
-  }
-  vTaskDelete(NULL);  // 작업 삭제
-}
-
-// 업데이트 상태 기록 함수
-void Tool::saveUpdateState(String state) {
-  File file = SPIFFS.open(updateStateFile, FILE_WRITE);
-  if (file) {
-    file.print(state);
-    file.close();
-  }
-}
-
-// 업데이트 상태 읽기 함수
-String Tool::readUpdateState() {
-  if (SPIFFS.exists(updateStateFile)) {
-    File file = SPIFFS.open(updateStateFile, FILE_READ);
-    if (file) {
-      String state = file.readString();
-      file.close();
-      return state;
+        Serial.println("HTTP_UPDATE_OK");
+        break;
     }
   }
-  return "";
 }
 
-// 업데이트 상태 파일 삭제
-void Tool::deleteUpdateState() {
-  if (SPIFFS.exists(updateStateFile)) {
-    SPIFFS.remove(updateStateFile);
-  }
-}
-
-// 파일 이름을 SPIFFS에 저장하는 함수
-void Tool::saveFirmwareFileName(String fileName) {
-  File file = SPIFFS.open(firmwareFileNameFile, FILE_WRITE);
-  if (file) {
-    file.print(fileName);
-    file.close();
-  }
-}
-
-// 저장된 파일 이름을 SPIFFS에서 읽어오는 함수
-String Tool::readFirmwareFileName() {
-  if (SPIFFS.exists(firmwareFileNameFile)) {
-    File file = SPIFFS.open(firmwareFileNameFile, FILE_READ);
-    if (file) {
-      String fileName = file.readString();
-      file.close();
-      return fileName;
-    }
-  }
-  return "";
-}
-
-// 저장된 파일 이름을 삭제하는 함수
-void Tool::deleteFirmwareFileName() {
-  if (SPIFFS.exists(firmwareFileNameFile)) {
-    SPIFFS.remove(firmwareFileNameFile);
+void Tool::blinkLed(int iteration) {
+  for (int i = 0; i < iteration; i++) {
+    digitalWrite(ledPin, HIGH); // LED 켜기
+    delay(100);                 // 0.1초 대기
+    digitalWrite(ledPin, LOW);  // LED 끄기
+    delay(100);                 // 0.1초 대기
   }
 }
 
