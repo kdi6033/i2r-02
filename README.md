@@ -16,6 +16,10 @@ WiFi Bluetooth PLC (4채널 릴레이, , ESP32) KC인증
 <img width="2366" height="580" alt="case-i2r-02" src="https://github.com/user-attachments/assets/872d3cf1-4ba2-40f7-af34-75e9b9543c0d" />
 [i2r-02 케이스 stl 파일 다운로드](https://github.com/kdi6033/i2r-02/raw/main/%EC%9E%90%EB%A3%8C/asm-i2r-02.stl)
 
+<a href="https://github.com/kdi6033/i2r-02/raw/main/%EC%9E%90%EB%A3%8C/asm-i2r-02.stl" style="text-decoration: none; color: inherit;">
+  i2r-02 케이스 stl 파일 다운로드
+</a>
+
 # "Play 스토어" 에서 어플을 다운로드 하세요 프로그램 하지 않아도 원격으로 모니터링/제어 할 수 있습니다.  
 
 다운로드 QR CODE
