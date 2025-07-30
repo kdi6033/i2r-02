@@ -14,8 +14,6 @@ WiFi Bluetooth PLC (4채널 릴레이, , ESP32) KC인증
 - RS232 통신 : 보드내에 TTL Level의 rx, tx 단자가 있습니다.
 
 <img width="2366" height="580" alt="case-i2r-02" src="https://github.com/user-attachments/assets/872d3cf1-4ba2-40f7-af34-75e9b9543c0d" />
-[i2r-02 케이스 stl 파일 다운로드](https://github.com/kdi6033/i2r-02/raw/main/%EC%9E%90%EB%A3%8C/asm-i2r-02.stl)
-
 <a href="https://github.com/kdi6033/i2r-02/raw/main/%EC%9E%90%EB%A3%8C/asm-i2r-02.stl" style="text-decoration: none; color: inherit;">
   i2r-02 케이스 stl 파일 다운로드
 </a>
