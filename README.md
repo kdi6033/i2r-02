@@ -13,6 +13,9 @@ WiFi Bluetooth PLC (4채널 릴레이, , ESP32) KC인증
 와이파이는 2.4G에 연결하세요. 5G는 동작하지 않습니다.
 - RS232 통신 : 보드내에 TTL Level의 rx, tx 단자가 있습니다.
 
+<img width="2366" height="580" alt="case-i2r-02" src="https://github.com/user-attachments/assets/872d3cf1-4ba2-40f7-af34-75e9b9543c0d" />
+
+
 # "Play 스토어" 에서 어플을 다운로드 하세요 프로그램 하지 않아도 원격으로 모니터링/제어 할 수 있습니다.  
 
 다운로드 QR CODE
