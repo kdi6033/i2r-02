@@ -1,10 +1,7 @@
-// Boards Manager 버젼은 esp32 by Espressif System 3.0.4 으로 개발했어요
-// 버젼을 3.0.4으로 하세요
+//i2r-04-motor
+// 이 프로그램은 4개의 모터를 정회전 역회전 제어하는 프로그램 입니디.
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <BLEDevice.h>
-#include <BLEUtils.h>
-#include <BLEServer.h>
 #include <ArduinoJson.h>
 #include "SPIFFS.h"
 #include <FS.h>
@@ -12,12 +9,16 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
-#include "esp_system.h"  // 메모리 체
+#include "esp_system.h"  // 메모리 체크
 
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <time.h>
 #include <vector>
+
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
 
 // Output pin numbers
 const int outputPins[4] = {26, 27, 32, 33};
@@ -28,6 +29,9 @@ const int numberOfPins = sizeof(outputPins) / sizeof(outputPins[0]);
 #define TRIGGER_PIN 34 // Factory Reset trigger pin GPIO36:i2r-04 GPIO34:i2r-03
 const int ledPin = 2;
 bool ledState = LOW; // ledPin = 2 LED의 현재 상태를 기록할 변수
+unsigned int counter = 0;
+
+void parseJSONPayload(byte* payload, unsigned int length);  
 
 // Define the Data structure
 struct PinStateChange {
@@ -38,23 +42,44 @@ struct PinStateChange {
   unsigned long timestamp; // 상태 변경 시간
 };
 
+
+// 입력에 따라 출력의 설정 : 배열로 형성됨
+struct PendingOutput {
+  int port;           // 출력 포트
+  bool trigger;       // 트리거 (true: ON일때, false: OFF일때)
+  int slotIndex;      // 고유 인덱스
+  int delay;          // 지연 시간
+  unsigned long executeTime; // 실행 시간
+  bool exec = false;  // 실행 여부
+  PinStateChange change; // 상태 변경 정보
+} pendingOutput;
+
 struct Device {
-public:
-  int type = 2;
+  std::vector<PendingOutput> pendingOutputs;
+  //int type = 4;
+  String type = "2";
   String mac=""; // Bluetooth mac address 를 기기 인식 id로 사용한다.
-  unsigned long lastTime = 0;  // 마지막으로 코드가 실행된 시간을 기록할 변수
-  const long interval = 500;  // 실행 간격을 밀리초 단위로 설정 (3초)
+  unsigned long lastTime = 0;  // 마지막으로 코드가 실행된 시간을 기록할 변수bio list sent
+  const long interval = 100;  // 실행 간격을 밀리초 단위로 설정 (3초)
   int out[numberOfPins];
   int in[numberOfPins];
   String sendData="",sendDataPre=""; // 보드의 입력,출려,전압 데이터를 json 형태로 저장
+
+  void addPendingOutput(PendingOutput output);
+  void removePendingOutput(int slotIndex);
+  void setPendingExec(int port, bool currentState);
+  void printPendingOutputs();
+  void processPendingExecutions();
+  
   void checkFactoryDefault();
   void loop();
   void sendStatusCheckChange(bool dataChange); // 현재 상태를 전송하는 함수
   void sendOut(int port, bool portState); // 핀 상태를 MQTT로 전송하는 함수
-  std::vector<PinStateChange> pinStateChanges[numberOfPins+2][2]; // 포트당 2개의 상태 변경 내역 저장 (0=false,1=true)
+  std::vector<PinStateChange> pinStateChanges[numberOfPins][2];  // 포트당 2개의 상태 변경 내역 저장 (0=false,1=true)
   void loadPinStatesFromSPIFFS();
   void digitalWriteUpdateData(int pin, bool value);
 } dev;
+
 
 struct Ble {
 public:
@@ -66,16 +91,13 @@ public:
   void readBleMacAddress();
   void writeToBle(int order);
 } ble;
-
-// Global variable to store program start time
-unsigned long programStartTime;
+BLECharacteristic *pCharacteristic;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 
 struct WifiMqtt {
 public:
-  bool selectMqtt=false;
   bool isConnected=false;
   bool isConnectedMqtt=false;
   String ssid="";
@@ -88,18 +110,30 @@ public:
   unsigned long statusSendCounter = 0; // MQTT 연결 시 상태 전송 횟수를 기록할 변수
   unsigned long startupTime; // 프로그램 시작 시간
   const unsigned long ignoreDuration = 5000; // 무시할 시간 (밀리초 단위), 예: 5000ms = 5초
+
+  unsigned long lastMqttRetryTime = 0;
+  const unsigned long mqttRetryInterval = 60000;  // 1분
+  unsigned long lastWifiRetryTime = 0;
+  const unsigned long wifiRetryInterval = 60000;  // 1분
+
   void loop();
   void connectToWiFi();
   void publishMqtt();
   void reconnectMQTT();
   void readWifiMacAddress();
 };
+
+// Create an instance of the Data structure
+WifiMqtt wifi,wifiSave;
+
 struct Config {
-public:
   bool initializeSPIFFS();
-  void loadConfigFromSPIFFS();
-  void saveConfigToSPIFFS();
+  void loadConfigFromSPIFFS(); //wifi
+  void saveConfigToSPIFFS();  //wifi
+  void savePendingOutputsToFile(int portNo);    //pendingOutput
+  void loadPendingOutputsFromFile(int portNo);  //pendingOutput
 } config;
+
 
 struct Tool {
 public:
@@ -112,14 +146,10 @@ public:
   void blinkLed(int iteration);
 } tool;
 
-// Create an instance of the Data structure
-WifiMqtt wifi,wifiSave;
-
-unsigned int counter = 0;
-BLECharacteristic *pCharacteristic;
-
-void parseJSONPayload(byte* payload, unsigned int length);
 void setup();
+void startDownloadFeedback();
+void stopDownloadFeedback();
+void blinkLEDTask(void * parameter);
 
 //=========================================================
 // NTP 서버 설정
@@ -130,9 +160,9 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
 
 // 핀 설정
-const int controlPins[] = {26, 27, 32, 33};
-bool pinStates[] = {false, false, false, false};  // 각 핀의 현재 상태 저장
-bool previousPinStates[] = {false, false, false, false};  // 각 핀의 이전 상태 저장
+const int controlPins[] = {26, 27, 32, 33, 21, 22, 23, 25}; // 핀 배열 수정
+bool pinStates[] = {false, false, false, false, false, false, false, false};  // 각 핀의 현재 상태 저장
+bool previousPinStates[] = {false, false, false, false, false, false, false, false};  // 각 핀의 이전 상태 저장
 
 // TimeSlot 클래스 정의
 class TimeSlot {
@@ -141,7 +171,7 @@ public:
   int startMinute;
   int endHour;
   int endMinute;
-  String repeatMode;  // "daily"="d" 또는 "weekly"="w"
+  String repeatMode;  // "daily" 또는 "weekly"
   int dayOfWeek;  // 요일 (0 = 일요일, 1 = 월요일, ..., 6 = 토요일)
   //time schedule 위한 프로그램
   unsigned long lastMsgTime = 0; // 마지막 메시지 전송 시간
@@ -158,7 +188,7 @@ public:
       : startHour(sh), startMinute(sm), endHour(eh), endMinute(em), repeatMode(rm), dayOfWeek(dow) {}
 
     TimeSlot() // 기본 생성자 추가
-      : startHour(0), startMinute(0), endHour(0), endMinute(0), repeatMode("d"), dayOfWeek(-1) {}
+      : startHour(0), startMinute(0), endHour(0), endMinute(0), repeatMode("daily"), dayOfWeek(-1) {}
 
     bool isActive(struct tm * timeinfo) {
         int currentHour = timeinfo->tm_hour;
@@ -167,9 +197,9 @@ public:
 
         //Serial.printf("Checking if active: Current time %02d:%02d, Current day %d\n", currentHour, currentMinute, currentDayOfWeek);
         //Serial.println(repeatMode);
-        if (repeatMode == "d") {
+        if (repeatMode == "daily") {
             return isTimeInRange(currentHour, currentMinute);
-        } else if (repeatMode == "w") {
+        } else if (repeatMode == "weekly") {
             if (currentDayOfWeek == dayOfWeek) {
                 return isTimeInRange(currentHour, currentMinute);
             }
@@ -182,9 +212,6 @@ private:
         int startTotalMinutes = startHour * 60 + startMinute;
         int endTotalMinutes = endHour * 60 + endMinute;
         int currentTotalMinutes = currentHour * 60 + currentMinute;
-
-        //Serial.printf("Checking time range: %02d:%02d - %02d:%02d, Current time: %02d:%02d\n", startHour, startMinute, endHour, endMinute, currentHour, currentMinute);
-
         if (startTotalMinutes < endTotalMinutes) {
             return currentTotalMinutes >= startTotalMinutes && currentTotalMinutes < endTotalMinutes;
         } else {
@@ -195,7 +222,7 @@ private:
 
 
 // 각 핀에 대한 동적 시간대 관리
-std::vector<TimeSlot> timeSlots[4];
+std::vector<TimeSlot> timeSlots[numberOfPins]; // 배열 크기를 numberOfPins로 수정
 
 // 함수 선언
 void addTimeSlot(int pinIndex, int startHour, int startMinute, int endHour, int endMinute, String repeatMode, int dayOfWeek = -1);
@@ -219,18 +246,18 @@ void TimeSlot::setup() {
   printCurrentTime();
 
   // SPIFFS에서 시간 슬롯 로드
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < numberOfPins; i++) { // 배열 크기를 numberOfPins로 수정
     loadTimeSlotsFromSPIFFS(i);
   }
 
   // 현재 스케줄 출력
-  printSchedules();
+  //printSchedules();
 }
 void TimeSlot::loop() {
   unsigned long currentMillis = millis();
   // 타임슬롯 전송 로직
   if (this->slotIndexToSend >= 0) {
-    if (currentMillis - this->lastMsgTime >= 200) { // 0.2초 간격으로 전송
+    if (currentMillis - this->lastMsgTime >= 1000) { // 1초 간격으로 전송
       sendNextTimeSlot();
       this->lastMsgTime = currentMillis;
     }
@@ -256,10 +283,7 @@ void TimeSlot::loop() {
 
   time_t currentTime = this->lastNtpTime + ((millis() - this->lastMillis) / 1000);
   struct tm* timeinfo = localtime(&currentTime);
-
-  //Serial.printf("Current loop time: %02d:%02d:%02d\n", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < numberOfPins; i++) { // 배열 크기를 numberOfPins로 수정
     bool pinOn = false;
     for (TimeSlot slot : timeSlots[i]) {
       if (slot.isActive(timeinfo)) {
@@ -279,49 +303,22 @@ void TimeSlot::loop() {
   }
 }
 //=========================================================
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message received: ");
+  for (unsigned int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
 
-void setup() {
-  Serial.begin(115200);
-  pinMode(TRIGGER_PIN, INPUT_PULLUP);
-  pinMode(ledPin, OUTPUT);
-  digitalWrite(ledPin, HIGH);
-  // Set each output pin as an output
-  for (int i = 0; i <numberOfPins; i++) {
-    pinMode(outputPins[i], OUTPUT);
-  }
-  // Set each input pin as an input
-  for (int i = 0; i < numberOfPins; i++) {
-    pinMode(inputPins[i], INPUT);
-  }
-
-  dev.checkFactoryDefault();
-  config.loadConfigFromSPIFFS();
-  if (wifi.ssid.isEmpty()) {
-    Serial.println("Bluetooth 셋업");
-    ble.setup();
-    // BLE이 제대로 초기화될 수 있도록 약간의 시간을 기다립니다.
-    delay(1000);
-    Serial.println("BLE ready!");
-  }
-  else {
-    // Wi-Fi 연결 설정
-    wifi.connectToWiFi();
-    // MQTT 설정
-    client.setServer(wifi.mqttBroker.c_str(), 1883);
-    client.setCallback(callback);
-    // 프로그램 시작 시간 기록
-    wifi.startupTime = millis();
-    programStartTime = millis(); // Record program start time
-    timeManager.setup();
+  // 프로그램 시작 후 일정 시간 동안 메시지 무시
+  unsigned long currentMillis = millis();
+  if (currentMillis - wifi.startupTime < wifi.ignoreDuration) {
+    Serial.println("프로그램 시작 후 초기 메시지 무시 중...");
+    return;
   }
 
-  // Load pin states from SPIFFS
-  dev.loadPinStatesFromSPIFFS();
-
-  // setup이 끝나는 시점에서 메모리 사용량 출력
-  Serial.print("Free heap memory after setup: ");
-  Serial.println(esp_get_free_heap_size());
-
+  // JSON 파싱
+  parseJSONPayload(payload, length);
 }
 
 /* 블루투스 함수 ===============================================*/
@@ -433,29 +430,20 @@ void Ble::readBleMacAddress() {
 }
 /* 블루투스 함수 ===============================================*/
 
+
 /* 와이파이 MQTT 함수 ===============================================*/
-void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message received: ");
-  for (unsigned int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
+void WifiMqtt::publishMqtt() { 
+  // dev.sendData에 email과 mac을 추가
+  String message = dev.sendData;
+  // dev.sendData 끝에 '}'가 없으면 추가
+  if (message.charAt(message.length() - 1) != '}') {
+    message += "}";
   }
-  Serial.println();
-
-  // 프로그램 시작 후 일정 시간 동안 메시지 무시
-  unsigned long currentMillis = millis();
-  if (currentMillis - wifi.startupTime < wifi.ignoreDuration) {
-    Serial.println("프로그램 시작 후 초기 메시지 무시 중...");
-    return;
-  }
-
-  // JSON 파싱
-  parseJSONPayload(payload, length);
-}
-
-void WifiMqtt::publishMqtt()
-{ 
-  Serial.println("publish: "+dev.sendData);
-  client.publish(wifi.outTopic, dev.sendData.c_str());
+  // email과 mac을 추가
+  message = message.substring(0, message.length() - 1) + 
+            ", \"e\": \"" + wifi.email + "\", \"m\": \"" + dev.mac + "\"}";
+  //Serial.println("publishMqtt: " + message);
+  client.publish(wifi.outTopic, message.c_str());
 }
 
 void WifiMqtt::connectToWiFi() {
@@ -480,8 +468,9 @@ void WifiMqtt::connectToWiFi() {
   }
 
   this->readWifiMacAddress();
-  
-  if(this->isConnected == true) {
+
+  if (WiFi.status() == WL_CONNECTED) {
+    this->isConnected = true;  // ✅ 여기에서 연결되었음을 명시적으로 설정
     Serial.println("\nConnected to Wi-Fi");
 
     // 이메일 기반으로 MQTT 토픽 이름 설정
@@ -493,21 +482,41 @@ void WifiMqtt::connectToWiFi() {
     this->inTopic[sizeof(this->inTopic) - 1] = '\0'; // 널 종료 보장
 
   } else {
+    this->isConnected = false;  // ✅ 연결 실패 시 false 설정
     Serial.println("\nWi-Fi를 찾을 수 없습니다.");
   }
-  
 }
 
 void WifiMqtt::loop() {
-  if(this->isConnected == false)
-    return;
-  if (!client.connected()) {
-    this->reconnectMQTT();
+  // Wi-Fi 연결 상태 점검 및 재시도
+  if (WiFi.status() != WL_CONNECTED) { 
+    this->isConnected = false;  // 연결 실패 상태 반영
+
+    if (millis() - lastWifiRetryTime > wifiRetryInterval) { // 30초마다 재시도
+      Serial.println("와이파이 재시도...");
+      WiFi.disconnect(true);  // true: erase old credentials (optional)
+      delay(100);             // ✴️ 내부 상태 초기화 대기 (중요)
+      WiFi.begin(ssid.c_str(), password.c_str());
+      lastWifiRetryTime = millis();
+    }
+  } else {
+    this->isConnected = true; // 연결 성공 시 true로 설정
   }
-  client.loop();
+
+  // WiFi가 연결되어 있을 때만 동작
+  if (wifi.isConnected) {
+    if (!client.connected() && (millis() - lastMqttRetryTime > mqttRetryInterval)) {
+      Serial.println("mqtt 재접속 시도");
+      wifi.reconnectMQTT();
+      lastMqttRetryTime = millis();
+    }
+    if (client.connected()) {
+      client.loop();  // MQTT 연결된 경우에만 실행
+    }
+  }
 
   // LED 점멸 로직 mqtt가 연결되면 2초간격으로 점멸한다.
-  if (isConnectedMqtt) {
+  if (this->isConnectedMqtt) {
     unsigned long currentMillis = millis();
     if (currentMillis - this->lastBlinkTime >= 1000) { // 2초 간격으로 점멸
       this->lastBlinkTime = currentMillis;
@@ -526,24 +535,31 @@ void WifiMqtt::loop() {
 }
 
 void WifiMqtt::reconnectMQTT() {
-  if(wifi.isConnected == false)
+  if (!wifi.isConnected) return;
+
+  if (client.connected()) {
+    this->isConnectedMqtt = true;
     return;
-  while (!client.connected()) {
-    dev.checkFactoryDefault();
-    Serial.println("Connecting to MQTT...");
-    if (client.connect(dev.mac.c_str())) {
-      Serial.println("Connected to MQTT");
-      client.subscribe(wifi.inTopic); // MQTT 토픽 구독
-      wifi.isConnectedMqtt=true;
-    } else {
-      Serial.print("MQTT connection failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" Retrying in 5 seconds...");
-      wifi.isConnectedMqtt=false;
-      delay(5000);
-    }
   }
-  //digitalWrite(ledPin, wifi.isConnectedMqtt);
+
+  unsigned long now = millis();
+  // ✅ 부팅 직후에는 지연 없이 바로 시도 (lastMqttRetryTime == 0일 경우)
+  if (wifi.lastMqttRetryTime != 0 && (now - wifi.lastMqttRetryTime < wifi.mqttRetryInterval)) {
+    return;
+  }
+  wifi.lastMqttRetryTime = now;  // 시도 시간 업데이트
+
+  Serial.println("Trying to connect to MQTT...");
+
+  if (client.connect(dev.mac.c_str())) {
+    Serial.println("MQTT connected.");
+    client.subscribe(wifi.inTopic);
+    this->isConnectedMqtt = true;
+  } else {
+    Serial.print("MQTT connect failed, rc=");
+    Serial.println(client.state());
+    this->isConnectedMqtt = false;
+  }
 }
 
 void WifiMqtt::readWifiMacAddress() {
@@ -562,6 +578,9 @@ void WifiMqtt::readWifiMacAddress() {
 void sendNextTimeSlot() {
   if (timeManager.slotIndexToSend < timeSlots[timeManager.currentPinIndex].size()) {
     dev.sendData=getTimeSlotJson(timeManager.currentPinIndex, timeManager.slotIndexToSend);
+    // ✅ 메시지를 Serial 모니터에 출력
+    Serial.println("📤 Sending schedule message:");
+    Serial.println(dev.sendData);  // 추가된 부분
     wifi.publishMqtt();
     timeManager.slotIndexToSend++;
   } else {
@@ -572,7 +591,7 @@ void sendNextTimeSlot() {
 
 void printSchedules() {
   Serial.println("Current Schedules:");
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < numberOfPins; i++) { // 배열 크기를 numberOfPins로 수정
     Serial.printf("Pin %d:\n", controlPins[i]);
     for (const TimeSlot& slot : timeSlots[i]) {
       if (slot.repeatMode == "weekly") {
@@ -596,7 +615,7 @@ void printCurrentTime() {
 }
 
 void addTimeSlot(int pinIndex, int startHour, int startMinute, int endHour, int endMinute, String repeatMode, int dayOfWeek) {
-  if (pinIndex >= 0 && pinIndex < 4) {
+  if (pinIndex >= 0 && pinIndex < numberOfPins) {
     timeSlots[pinIndex].push_back(TimeSlot(startHour, startMinute, endHour, endMinute, repeatMode, dayOfWeek));
     Serial.println("Time slot added.");
   } else {
@@ -605,7 +624,7 @@ void addTimeSlot(int pinIndex, int startHour, int startMinute, int endHour, int 
 }
 
 void removeTimeSlot(int pinIndex, int slotIndex) {
-  if (pinIndex >= 0 && pinIndex < 4 && slotIndex >= 0 && slotIndex < timeSlots[pinIndex].size()) {
+  if (pinIndex >= 0 && pinIndex < numberOfPins && slotIndex >= 0 && slotIndex < timeSlots[pinIndex].size()) { // 배열 크기를 numberOfPins로 수정
     timeSlots[pinIndex].erase(timeSlots[pinIndex].begin() + slotIndex);
     Serial.println("Time slot removed.");
   } else {
@@ -614,7 +633,7 @@ void removeTimeSlot(int pinIndex, int slotIndex) {
 }
 
 void removeAllTimeSlots(int pinIndex) {
-  if (pinIndex >= 0 && pinIndex < 4) {
+  if (pinIndex >= 0 && pinIndex < numberOfPins) { // 배열 크기를 numberOfPins로 수정
     timeSlots[pinIndex].clear();
     Serial.println("All time slots removed.");
   } else {
@@ -638,8 +657,8 @@ void saveTimeSlotsToSPIFFS(int pinIndex) {
     slotObj["sM"] = slot.startMinute;
     slotObj["eH"] = slot.endHour;
     slotObj["eM"] = slot.endMinute;
-    slotObj["rM"] = slot.repeatMode;
-    slotObj["dW"] = slot.dayOfWeek;
+    slotObj["rm"] = slot.repeatMode;
+    slotObj["dw"] = slot.dayOfWeek;
   }
 
   if (serializeJson(doc, file) == 0) {
@@ -670,7 +689,7 @@ void loadTimeSlotsFromSPIFFS(int pinIndex) {
   DeserializationError error = deserializeJson(doc, buf.get());
 
   if (error) {
-    Serial.println("Failed to parse file");
+    //Serial.println("Failed to parse file");
     file.close();
     return;
   }
@@ -681,7 +700,7 @@ void loadTimeSlotsFromSPIFFS(int pinIndex) {
     int startMinute = slotObj["sM"];
     int endHour = slotObj["eH"];
     int endMinute = slotObj["eM"];
-    String repeatMode = slotObj["rM"].as<String>();
+    String repeatMode = slotObj["rm"].as<String>();
     int dayOfWeek = slotObj["dW"];
 
     timeSlots[pinIndex].push_back(TimeSlot(startHour, startMinute, endHour, endMinute, repeatMode, dayOfWeek));
@@ -694,17 +713,16 @@ String getTimeSlotJson(int pinIndex, int slotIndex) {
   DynamicJsonDocument doc(256);
   JsonObject slotObj = doc.to<JsonObject>();
   const TimeSlot& slot = timeSlots[pinIndex][slotIndex];
-  slotObj["order"] = 4;
-  slotObj["pI"] = pinIndex;
+  slotObj["c"] = "sch";
+  slotObj["o"] = "list";
+  slotObj["pi"] = pinIndex;
   slotObj["index"] = slotIndex;
-  slotObj["sH"] = slot.startHour;
-  slotObj["sM"] = slot.startMinute;
-  slotObj["eH"] = slot.endHour;
-  slotObj["eM"] = slot.endMinute;
-  slotObj["rM"] = slot.repeatMode;
-  slotObj["dW"] = slot.dayOfWeek;
+  slotObj["start"] = slot.startHour * 60 + slot.startMinute;  // 분 단위로 변환
+  slotObj["end"] = slot.endHour * 60 + slot.endMinute;        // 분 단위로 변환
+  slotObj["rm"] = slot.repeatMode;
+  slotObj["dw"] = slot.dayOfWeek;
   // 전체 타임슬롯 중 현재 타임슬롯의 인덱스 + 1 / 전체 타임슬롯 수
-  slotObj["pN"] = String(slotIndex + 1) + "/" + String(timeSlots[pinIndex].size());
+  slotObj["pn"] = String(slotIndex + 1) + "/" + String(timeSlots[pinIndex].size());
 
   String jsonString;
   serializeJson(doc, jsonString);
@@ -724,116 +742,226 @@ void Device::loop() {
 
   if (currentTime - this->lastTime >= this->interval) {
     this->lastTime = currentTime;
-    this->sendStatusCheckChange(true); // 입력 핀 상태 체크 및 변화 감지
+
+    // 모든 입력 포트를 확인
+    for (int i = 0; i < numberOfPins; i++) {
+      bool currentState = digitalRead(inputPins[i]) == HIGH;  // HIGH일 경우 true, LOW일 경우 false로 변환
+
+      // 입력 값이 바뀌었을 때 처리
+      if (dev.in[i] != currentState) {
+        dev.in[i] = currentState;
+
+        // 트리거 발생 조건 수정 (currentState가 HIGH 때)
+        if (currentState == HIGH) {
+          //Serial.printf("⚡ 트리거 발생: 포트 %d (HIGH 상태)\n", i);
+          this->setPendingExec(i,currentState);
+          this->printPendingOutputs();
+        }
+        // currentState가 LOW일 때도 트리거 발생
+        if (currentState == LOW) {
+          //Serial.printf("⚡ 트리거 발생: 포트 %d (LOW 상태)\n", i);
+          this->setPendingExec(i,currentState);
+          this->printPendingOutputs();
+        }
+      }
+    }
+
+    // 상태 변경 여부와 관계없이 상태 전송
+    this->sendStatusCheckChange(true);
+  }
+
+  // ✅ 실행 조건 확인 및 수행
+  this->processPendingExecutions();
+}
+
+void Device::setPendingExec(int port, bool currentState) {
+  for (auto& po : pendingOutputs) {
+    if (po.port == port && po.trigger == currentState) {  // trigger가 currentState와 일치할 때만 실행
+      po.exec = true;
+      po.executeTime = millis() + po.delay * 1000;
+    }
+  }
+}
+
+
+void Device::printPendingOutputs() {
+  if (pendingOutputs.empty()) {
+    Serial.println("📭 pendingOutputs 비어 있음");
+    return;
+  }
+
+  Serial.println("📤 [MQTT 형식 PendingOutput 목록]");
+  for (const auto& po : pendingOutputs) {
+    Serial.printf(
+      "{\"slotIndex\":%d,\"port\":%d,\"trigger\":%s,\"delay\":%d,\"exec\":%s,"
+      "\"mac\":\"%s\",\"n\":%d,\"v\":%d}\n",
+      po.slotIndex,
+      po.port,
+      po.trigger ? "true" : "false",
+      po.delay,
+      po.exec ? "true" : "false",
+      po.change.mac.c_str(),
+      po.change.port,
+      po.change.value ? 1 : 0
+    );
+  }
+}
+
+
+void Device::addPendingOutput(PendingOutput output) {
+  pendingOutputs.push_back(output);
+}
+
+void Device::removePendingOutput(int slotIndex) {
+  for (auto it = pendingOutputs.begin(); it != pendingOutputs.end(); ++it) {
+    if (it->slotIndex == slotIndex) {
+        pendingOutputs.erase(it);
+        break;
+    }
+  }
+}
+
+
+void Device::processPendingExecutions() {
+  unsigned long now = millis();
+
+  for (int i = 0; i < pendingOutputs.size(); ) {
+    PendingOutput& po = pendingOutputs[i];
+    if (po.exec && now >= po.executeTime) {
+      // ✅ 각 PendingOutput 내용 출력
+      Serial.printf("⚙️ 실행됨 → slotIndex=%d | port=%d → value=%d\n",
+                      po.slotIndex, po.change.port, po.change.value ? 1 : 0);
+      if (po.change.mac == this->mac) {
+        this->digitalWriteUpdateData(po.change.port, po.change.value);
+        //digitalWrite(outputPins[po.change.port],po.change.value);
+      } else {
+        // MQTT로 전송
+        DynamicJsonDocument doc(256);
+        doc["c"] = "so";
+        doc["m"] = po.change.mac;
+        doc["n"] = po.change.port;
+        doc["v"] = po.change.value ? 1 : 0;
+        doc["sI"] = po.slotIndex;
+        String payload;
+        //serializeJson(doc, payload);
+        //client.publish(wifi.inTopic, payload.c_str());
+        serializeJson(doc, this->sendData);
+        wifi.publishMqtt();
+        Serial.println("📡 MQTT 전송됨: " + payload);
+      }
+      po.exec = false; // ✅ 다시 대기 상태로 되돌림
+      //this->printPendingOutputs();
+    } else {
+      ++i;  // 조건이 안 되면 다음 항목으로
+    }
   }
 }
 
 void Device::digitalWriteUpdateData(int pin, bool value) {
-  // dev.out 업데이트
+  if (dev.out[pin] == value) return;
+  // 선택 핀에 새로운 값 적용
   dev.out[pin] = value;
-  // 출력 포트로 값 설정
   digitalWrite(outputPins[pin], value ? HIGH : LOW);
-  this->sendStatusCheckChange(false);
+
+  this->sendStatusCheckChange(false);  // 상태 전송
 }
 
 void Device::loadPinStatesFromSPIFFS() {
-  for (int port = 0; port < numberOfPins+2; ++port) {
-    String fileName = "/pinState_" + String(port) + ".json";
-    if (!SPIFFS.exists(fileName)) {
-      // pinStateChanges[port][0], pinStateChanges[port][1] 모든 데이터를 null 또는 -1로 초기화
-      dev.pinStateChanges[port][0].clear();
-      dev.pinStateChanges[port][1].clear();
-      
-      PinStateChange defaultChange;
-      defaultChange.mac = "";
-      defaultChange.port = -1;
-      defaultChange.value = false;
-      defaultChange.timestamp = 0;
-
-      dev.pinStateChanges[port][0].push_back(defaultChange);
-      dev.pinStateChanges[port][1].push_back(defaultChange);
-      //file 만들고 저장해줘
-      //Serial.println("Initialized pinStateChanges for port " + String(port));
-    } else {
-      // 파일이 존재하면 내용을 읽어서 로드
-      File file = SPIFFS.open(fileName, FILE_READ);
-      if (!file) {
-        Serial.println("Failed to open file for reading");
-        continue;
-      }
-
-      size_t size = file.size();
-      if (size > 1024) {  // Adjust size according to expected payload
-        Serial.println("File size is too large");
-        file.close();
-        continue;
-      }
-
-      std::unique_ptr<char[]> buf(new char[size]);
-      file.readBytes(buf.get(), size);
-      Serial.println(buf.get());
-
-      DynamicJsonDocument doc(2048);  // Adjust size according to expected payload
-      DeserializationError error = deserializeJson(doc, buf.get());
-
-      if (error) {
-        Serial.println("Failed to parse file");
-        file.close();
-        continue;
-      }
-
-      JsonArray changesArray = doc["changes"];
-      dev.pinStateChanges[port][0].clear();
-      dev.pinStateChanges[port][1].clear();
-      
-      int index=0;
-      for (JsonObject changeObj : changesArray) {
-        PinStateChange change;
-        change.mac = changeObj["mac"].as<String>();
-        change.port = changeObj["port"].as<int>();
-        change.value = changeObj["value"].as<bool>();
-        change.timestamp = changeObj["timestamp"];
-        dev.pinStateChanges[port][index++].push_back(change);
-      }
-
-      file.close();
-    }
-  }
-
-  // PinStateChange 프린트
-  /*
-  Serial.println("---------------");
   for (int port = 0; port < numberOfPins; ++port) {
-    Serial.printf("Port %d - false state:\n", port);
-    for (const auto& change : this->pinStateChanges[port][0]) {
-      Serial.printf("Loaded PinStateChange: MAC=%s, port=%d, value=%s, timestamp=%lu\n", 
-                    change.mac.c_str(), change.port, change.value ? "true" : "false", change.timestamp);
+    String fileName = "/pinState_" + String(port) + ".json";
+
+    // === 파일이 없으면 빈 배열 구조로 초기화하고 저장 ===
+    if (!SPIFFS.exists(fileName)) {
+      dev.pinStateChanges[port][0].clear();
+      dev.pinStateChanges[port][1].clear();
+
+      File file = SPIFFS.open(fileName, FILE_WRITE);
+      if (file) {
+        DynamicJsonDocument doc(256);
+        doc.createNestedArray("changes");  // 빈 changes 배열
+        serializeJson(doc, file);
+        file.close();
+        Serial.println("📄 Created empty config: " + fileName);
+      } else {
+        Serial.println("⚠️ Failed to create file: " + fileName);
+      }
+      continue;  // 다음 포트로 넘어감
     }
 
-    Serial.printf("Port %d - true state:\n", port);
-    for (const auto& change : this->pinStateChanges[port][1]) {
-      Serial.printf("Loaded PinStateChange: MAC=%s, port=%d, value=%s, timestamp=%lu\n", 
-                    change.mac.c_str(), change.port, change.value ? "true" : "false", change.timestamp);
+    // === 파일 존재할 경우 로딩 ===
+    File file = SPIFFS.open(fileName, FILE_READ);
+    if (!file) {
+      Serial.println("❌ Failed to open file: " + fileName);
+      continue;
     }
+
+    size_t size = file.size();
+    if (size > 1024) {
+      Serial.println("❌ File too large: " + fileName);
+      file.close();
+      continue;
+    }
+
+    std::unique_ptr<char[]> buf(new char[size + 1]);
+    file.readBytes(buf.get(), size);
+    buf[size] = '\0';  // Null terminate for safety
+    file.close();
+
+    //Serial.println("📥 Loading config: " + fileName);
+    //Serial.println(buf.get());
+
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, buf.get());
+
+    if (error) {
+      Serial.println("❌ Failed to parse JSON: " + String(error.c_str()));
+      continue;
+    }
+
+    JsonArray changesArray = doc["changes"];
+    dev.pinStateChanges[port][0].clear();
+    dev.pinStateChanges[port][1].clear();
+
+    for (JsonObject changeObj : changesArray) {
+      PinStateChange change;
+      change.mac = changeObj["mac"] | "";
+      change.port = changeObj["port"] | -1;
+      change.value = changeObj["value"] | false;
+      change.timestamp = changeObj["timestamp"] | 0;
+
+      int stateIndex = change.value ? 1 : 0;  // true=1, false=0
+      dev.pinStateChanges[port][stateIndex].push_back(change);
+    }
+
+    //Serial.printf("✅ Loaded %d change(s) for port %d\n", changesArray.size(), port);
   }
-  Serial.println("---------------");
-  */
 }
 
+
 // 핀 상태를 다이렉트 또는 MQTT로 전송하는 함수 정의
+//입력 포트가 ON 또는 OFF될 때 연결된 출력 동작을 실행하기 위해 호출되는 함수입니다.
+//sendStatusCheckChange() 함수에서 입력 상태가 변경되었을 때 실행됩니다.
 void Device::sendOut(int port, bool portState) {
+  // 설정된 출력이 없으면 아무 작업도 하지 않음
+  if (dev.pinStateChanges[port][int(portState)].empty()) {
+    Serial.println("❌ No output binding set for input port " + String(port) + " with state " + String(portState));
+    return;
+  }
+
   PinStateChange change = dev.pinStateChanges[port][int(portState)][0];  // pinStateChanges[port][1]에서 첫 번째 항목 가져오기
   if (change.mac == dev.mac) {
     // MAC 주소가 현재 장치의 MAC 주소와 동일하면 직접 포트로 출력
     this->digitalWriteUpdateData(change.port,change.value);
+    //Serial.println("change.port:"+(String)change.port);
+    //digitalWrite(outputPins[change.port],change.value);
     Serial.println("Direct output to port " + String(change.port) + " with value " + String(change.value));
   } else {
     // MAC 주소가 다르면 MQTT 메시지 전송
     DynamicJsonDocument doc(256);
-    doc["order"] = 2;
-    doc["mac"] = change.mac;
-    doc["no"] = change.port;
-    doc["value"] = change.value;
+    doc["c"] = "so";
+    doc["m"] = change.mac;
+    doc["n"] = change.port;
+    doc["v"] = change.value ? 1 : 0;  // ✅ true → 1, false → 0
     String output;
     serializeJson(doc, output);
     client.publish(wifi.inTopic, output.c_str());
@@ -844,14 +972,11 @@ void Device::sendOut(int port, bool portState) {
 //dataChange=true이전값과 비교하여 값이 변했으면 데이터 보낸다.
 //dataChange=false 무조건 데이터 보낸다.
 void Device::sendStatusCheckChange(bool dataChange) {
-  //sensor.measure();
   DynamicJsonDocument responseDoc(1024);
-  responseDoc["type"] = dev.type;
-  responseDoc["email"] = wifi.email;
-  responseDoc["mac"] = dev.mac;
+  responseDoc["t"] = dev.type;
 
   JsonArray inArray = responseDoc.createNestedArray("in");
-  for (int i = 0; i < numberOfPins; i++) {
+  for (int i = 0; i < numberOfPins; i++) { // 배열 크기를 numberOfPins로 수정
     inArray.add(dev.in[i]); // mqtt보내기위한 문장 작성
     //in 포트 입력 변화시 여기 설정된 출력값 실행
     int currentState = digitalRead(inputPins[i]);
@@ -862,11 +987,12 @@ void Device::sendStatusCheckChange(bool dataChange) {
   }
 
   JsonArray outArray = responseDoc.createNestedArray("out");
-  for (int i = 0; i < numberOfPins; i++) {
+  for (int i = 0; i < numberOfPins; i++) { // 배열 크기를 numberOfPins로 수정
     outArray.add(dev.out[i]);
   }
   dev.sendData="";
   serializeJson(responseDoc, dev.sendData);
+  //Serial.println("측정센서: "+dev.sendData);
 
   if(dataChange == false && wifi.isConnectedMqtt == true) {
     wifi.publishMqtt();
@@ -875,11 +1001,96 @@ void Device::sendStatusCheckChange(bool dataChange) {
   if( !dev.sendData.equals(dev.sendDataPre)) {
     dev.sendDataPre = dev.sendData;
     if(wifi.isConnectedMqtt == true) {
-      Serial.println(dev.sendData);
+      //Serial.println(dev.sendData);
       wifi.publishMqtt();
     }
   }
 }
+
+void Config::loadPendingOutputsFromFile(int portNo) {
+  String fileName = "/bio_" + String(portNo) + ".json";
+  if (!SPIFFS.exists(fileName)) {
+    Serial.println("ℹ️ 스킵됨 (파일 없음): " + fileName);
+    return;
+  }
+
+  File file = SPIFFS.open(fileName, FILE_READ);
+  if (!file) { Serial.println("❌ 파일 열기 실패: " + fileName); return; }
+
+  DynamicJsonDocument doc(4096);
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+  if (error) { Serial.println("❌ JSON 파싱 실패: " + String(error.c_str())); return; }
+
+  if (!doc.containsKey("ps") || !doc["ps"].is<JsonArray>()) {
+    Serial.println("❌ 'ps' 키가 없거나 배열이 아닙니다.");
+    return;
+  }
+
+  JsonArray psArray = doc["ps"];
+  for (JsonObject obj : psArray) {
+    PendingOutput po;
+    po.port = portNo;
+
+    // ✅ 'tr' robust 파싱 (bool 또는 0/1 모두 허용)
+    if (obj.containsKey("tr")) {
+      if (obj["tr"].is<bool>()) {
+        po.trigger = obj["tr"].as<bool>();
+      } else {
+        po.trigger = (obj["tr"].as<int>() != 0);
+      }
+    } else {
+      // 과거 파일 호환: 기본 false로 두고 경고
+      po.trigger = false;
+      Serial.println("⚠️ 'tr' 없음 → 기본 false로 로드");
+    }
+
+    po.slotIndex    = obj["sI"] | 0;
+    po.delay        = obj["d"]  | 0;
+    po.executeTime  = obj["et"] | 0;
+    po.exec         = false;
+
+    po.change.mac       = obj["m"] | "";
+    po.change.port      = obj["n"] | -1;
+    po.change.value     = (obj["v"] | 0) == 1;
+    po.change.timestamp = millis();
+
+    dev.addPendingOutput(po);
+
+    Serial.printf("📥 로드됨: slotIndex=%d | port=%d | tr=%s → mac=%s, n=%d, v=%d, d=%d\n",
+      po.slotIndex, po.port, po.trigger ? "true" : "false",
+      po.change.mac.c_str(), po.change.port, po.change.value ? 1 : 0, po.delay);
+  }
+}
+
+void Config::savePendingOutputsToFile(int portNo) {
+  String fileName = "/bio_" + String(portNo) + ".json";
+  DynamicJsonDocument doc(4096);
+  JsonArray ps = doc.createNestedArray("ps");
+
+  for (const auto& po : dev.pendingOutputs) {
+    if (po.port != portNo) continue;
+
+    JsonObject o = ps.createNestedObject();
+    o["tr"] = po.trigger ? 1 : 0;       // ✅ 반드시 기록
+    o["sI"] = po.slotIndex;
+    o["d"]  = po.delay;
+    o["et"] = po.executeTime;
+    o["m"]  = po.change.mac;
+    o["n"]  = po.change.port;
+    o["v"]  = po.change.value ? 1 : 0;
+  }
+
+  File f = SPIFFS.open(fileName, FILE_WRITE);
+  if (!f) {
+    Serial.println("❌ 파일 쓰기 실패: " + fileName);
+    return;
+  }
+  serializeJson(doc, f);
+  f.close();
+  Serial.println("💾 저장 완료: " + fileName);
+}
+
 
 // Config 파일을 SPIFFS에서 읽어오는 함수
 void Config::loadConfigFromSPIFFS() {
@@ -1083,13 +1294,13 @@ void Tool::blinkLed(int iteration) {
   }
 }
 
-/* Tools ===========================================================*/
 
+/* Tools ===========================================================*/
 void parseJSONPayload(byte* payload, unsigned int length) {
   char payloadStr[length + 1];
   memcpy(payloadStr, payload, length);
   payloadStr[length] = '\0';  // Null-terminate the string
-  //Serial.println(payloadStr);
+  Serial.println(payloadStr);
 
   DynamicJsonDocument doc(1024);
   DeserializationError error = deserializeJson(doc, payloadStr);
@@ -1099,11 +1310,20 @@ void parseJSONPayload(byte* payload, unsigned int length) {
     return;
   }
 
-  int order = doc["order"] | -1;
-  if (order == 1) { //order=1 에는 mac 데이터 없음
+  String command = doc["c"] | "";
+
+  //command == "df"  ================================================================
+  if (command == "df") {
+    //펌웨어 다운로드
+    const char *fileName = doc["f"] | "";
+    tool.download_program(fileName);
+  }
+
+  //command == "si"  ================================================================
+  if (command == "si") {
     const char *ssid = doc["ssid"] | "";
     const char *password = doc["password"] | "";
-    const char *email = doc["email"] | "";
+    const char *email = doc["e"] | "";
     const char *mqttBroker = doc["mqttBroker"] | "";
 
     wifiSave.ssid = ssid;
@@ -1114,237 +1334,303 @@ void parseJSONPayload(byte* payload, unsigned int length) {
     Serial.print("wifi.ssid: "); Serial.println(wifiSave.ssid);
     Serial.print("wifi.password: "); Serial.println(wifiSave.password);
     Serial.print("wifi.email: "); Serial.println(wifiSave.email);
-     Serial.print("wifi.mqttBroker: "); Serial.println(wifiSave.mqttBroker);
+    Serial.print("wifi.mqttBroker: "); Serial.println(wifiSave.mqttBroker);
     config.saveConfigToSPIFFS();
   }
 
-  // 수신된 메시지에서 mac 주소를 읽어옵니다.
-  String receivedMac = doc["mac"] | "";
-  // 이 기기의 MAC 주소와 비교합니다.
-  if (receivedMac != dev.mac) {
-    //Serial.println("Received MAC address does not match device MAC address. Ignoring message.");
-    return;
-  }
-
-  if (order == 0) {
-    //펌웨어 다운로드
-    const char *fileName = doc["fileName"] | "";
-    tool.download_program(fileName);
-  }
-  else if (order == 2) {
+  //command == "so"  ================================================================
+  else if (command == "so") {
     //mqtt 로 전송된 출력을 실행한다.
     // JSON 메시지에서 "no"와 "value" 값을 읽어옵니다.
-    int no = doc["no"] | -1;  // 유효하지 않은 인덱스로 초기화
-    bool value = doc["value"] | false;
-    dev.out[no]=value;
+    int no = doc["n"] | -1;  // 유효하지 않은 인덱스로 초기화
+    int intValue = doc["v"] | 0;
+    bool value = (intValue == 1);  // 1이면 true, 아니면 false
+    dev.digitalWriteUpdateData(no, value);
+    //digitalWrite(outputPins[no],value);
+  }
 
-    // "no" 값이 유효한 범위 내에 있는지 확인하고, "out" 배열에 "value"를 설정합니다.
-    if (no >= 0 && no < numberOfPins) {
-      dev.out[no] = value ? 1 : 0;  // "true"이면 1로, "false"이면 0으로 설정startSendingTimeSlots
-    } else {
-      Serial.println("유효하지 않은 'no' 값입니다.");
-    }
-    digitalWrite(outputPins[no], dev.out[no]);
-  }
-  else if (order==3) {
-    //폰에서 화면을 초기화하기 위한 메세지 요청
-    dev.sendStatusCheckChange(false);
-  }
-  else if (order == 4) {
-    String oper = doc["oper"] | "";
-    int pinIndex = doc["pI"] | -1;
+  //command == "bio"  ================================================================
+  else if (command == "bio") {
+    String oper = doc["o"] | "";  // "o"는 operation (예: "save")
+    int portNo = doc["n"] | -1;   // 포트 번호
+    JsonArray portStates = doc["ps"].as<JsonArray>();  // 포트 상태 배열
+
     if (oper == "insert") {
-      int startHour = doc["sH"] | 0;
-      int startMinute = doc["sM"] | 0;
-      int endHour = doc["eH"] | 0;
-      int endMinute = doc["eM"] | 0;
-      String repeatMode = doc["rM"] | "d";
-      int dayOfWeek = doc["dW"] | -1;
+      //Serial.println(payloadStr);
+      //{"c":"bio","d":10,"m":"D4:8A:FC:B5:30:10","o":"insert","n":0,"tr":1,"ps":[{"m":"D4:8A:FC:B5:30:10","n":0,"v":1}]}
+      int inputPort = doc["n"] | -1;
+      bool triggerValue = (doc["tr"] | -1) == 1;
+      int triggerDelay = doc["d"] | 0;
 
-      addTimeSlot(pinIndex, startHour, startMinute, endHour, endMinute, repeatMode, dayOfWeek);
-      saveTimeSlotsToSPIFFS(pinIndex); // 타임슬롯 변경 시 SPIFFS에 저장
-      Serial.println("Time slot added and saved to SPIFFS");
+      if (inputPort < 0 || inputPort >= numberOfPins) {
+        Serial.println("❌ Invalid input port.");
+        return;
+      }
 
-      // 해당 핀 인덱스의 스케줄 리스트 전송
-      startSendingTimeSlots(pinIndex);
+      if (triggerValue != true && triggerValue != false) {
+        Serial.println("❌ Invalid trigger value.");
+        return;
+      }
+
+      //1. 포트 상태 배열 처리
+      for (JsonObject portState : portStates) {
+        PendingOutput po;
+        po.port = inputPort;
+        po.trigger = triggerValue;
+        po.slotIndex = dev.pendingOutputs.size();  // 고유 index 부여
+        po.delay = triggerDelay;
+        po.executeTime = millis() + triggerDelay * 1000;
+        po.exec = false;
+
+        // 포트 상태 변경 정보 설정
+        po.change.mac = portState["m"] | "";
+        po.change.port = portState["n"] | -1;
+        po.change.value = (portState["v"] | 0) == 1;
+        po.change.timestamp = millis();
+
+        dev.addPendingOutput(po);
+
+        // 핀 상태 조건에도 등록
+        int val = po.trigger ? 1 : 0;
+        dev.pinStateChanges[po.port][val].push_back(po.change);
+
+        Serial.printf("✅ PendingOutput 추가됨: in[%d]=%s → out[%d]=%s, delay=%d, slotIndex=%d\n",
+          po.port, po.trigger ? "ON" : "OFF",
+          po.change.port, po.change.value ? "ON" : "OFF",
+          po.delay, po.slotIndex
+        );
+      }
+      // SPIFFS에 저장
+      config.savePendingOutputsToFile(inputPort);
     }
-    else if (oper == "delete") {
-      int slotIndex = doc["slotIndex"] | -1;
+    
 
+    else if (oper == "list" && portNo >= 0 && portNo < numberOfPins) {
+      Serial.printf("📋 포트 %d의 pendingOutputs 리스트 개별 전송 중...\n", portNo);
+
+      dev.printPendingOutputs();  // 디버깅용 전체 출력
+
+      for (const auto& po : dev.pendingOutputs) {
+        if (po.port != portNo) continue;  // 현재 요청한 포트만 응답
+
+        DynamicJsonDocument responseDoc(512);
+        responseDoc["c"] = "bio";
+        responseDoc["o"] = "list";
+        responseDoc["n"] = portNo;
+
+        // ✅ 배열로 생성
+        JsonArray psArray = responseDoc.createNestedArray("ps");
+
+        JsonObject obj = psArray.createNestedObject();
+        obj["tr"] = po.trigger;
+        obj["d"] = po.delay;
+        obj["m"] = po.change.mac;
+        obj["n"] = po.change.port;
+        obj["v"] = po.change.value;
+        obj["sI"] = po.slotIndex;
+
+        dev.sendData = "";  // 이전 데이터 초기화
+        serializeJson(responseDoc, dev.sendData);
+        Serial.println(dev.sendData);
+        wifi.publishMqtt();  // 개별 전송
+        delay(100);  // 전송 간격 조절
+      }
+
+      Serial.println("✅ pendingOutputs 개별 bio list 전송 완료");
+    }
+
+    else if (oper == "delete" && portNo >= 0 && portNo < (numberOfPins)) {
+      int targetSlot = doc["sI"] | -1;
+      if (targetSlot < 0) {
+        Serial.println("❌ 잘못된 slotIndex");
+        return;
+      }
+
+      // 1. pendingOutputs 에서 삭제
+      int beforeSize = dev.pendingOutputs.size();
+      dev.removePendingOutput(targetSlot);  // ✅ 함수 호출
+
+      // 2. 삭제 확인
+      if (dev.pendingOutputs.size() < beforeSize) {
+        Serial.printf("🗑️ slotIndex=%d 삭제 완료\n", targetSlot);
+      } else {
+        Serial.printf("⚠️ 지정된 slotIndex를 찾을 수 없음: %d\n", targetSlot);
+      }
+
+      // 3. SPIFFS에 저장
+      config.savePendingOutputsToFile(portNo);
+    }
+
+    else if (oper == "deleteAll" && portNo >= 0 && portNo < (numberOfPins)) {
+      Serial.printf("🧹 포트 %d의 모든 조건 삭제 시작...\n", portNo);
+
+      // 1. 해당 포트의 핀 상태 초기화
+      if (portNo < numberOfPins) {
+        dev.pinStateChanges[portNo][0].clear();  // LOW 상태
+        dev.pinStateChanges[portNo][1].clear();  // HIGH 상태
+
+        // 2. 해당 포트의 SPIFFS 파일 삭제
+        String fileName = "/pinState_" + String(portNo) + ".json";
+        if (SPIFFS.exists(fileName)) {
+          SPIFFS.remove(fileName);
+          Serial.println("🗑️ 파일 삭제됨: " + fileName);
+        } else {
+          Serial.println("⚠️ 파일 없음: " + fileName);
+        }
+      }
+
+      // 3. 해당 포트의 pendingOutputs만 삭제
+      dev.pendingOutputs.erase(
+        std::remove_if(dev.pendingOutputs.begin(), dev.pendingOutputs.end(),
+                      [portNo](const PendingOutput& po) { return po.port == portNo; }),
+        dev.pendingOutputs.end()
+      );
+      Serial.printf("🗑️ 포트 %d의 pendingOutputs 삭제 완료\n", portNo);
+
+      Serial.printf("✅ 포트 %d의 deleteAll 완료\n", portNo);
+    }
+
+    else {
+      Serial.println("❗ Invalid bio save request or port number");
+    }
+  }
+
+  //command == "sch"  ================================================================
+  else if (command == "sch") {
+    Serial.println(payloadStr);
+    String oper = doc["o"] | "";
+    int pinIndex = doc["pi"] | -1;
+
+    if (oper == "insert") {
+      //{"c":"sch","m":"D4:8A:FC:B5:30:10","o":"insert","pi":0,"start":796,"end":796,"rm":"w","dw":[2,6]}
+      int start = doc["start"] | 0;  // 분 단위
+      int end = doc["end"] | 0;      // 분 단위
+      String repeatMode = doc["rm"] | "daily";
+      int pinIndex = doc["pI"] | 0;  // 출력 포트 인덱스
+
+      // 분 → 시:분 변환
+      int startHour = start / 60;
+      int startMinute = start % 60;
+      int endHour = end / 60;
+      int endMinute = end % 60;
+
+      // "rm"이 "w"일 때만 "dW" 배열 처리
+      if (repeatMode == "weekly") {
+        // "dW" 값이 JsonArray로 변환되는지 확인하고 출력
+        if (doc["dw"].is<JsonArray>()) {
+          JsonArray days = doc["dw"].as<JsonArray>();
+          
+          // JsonArray에서 값이 잘 추출되고 있는지 확인
+          String jsonString;
+          serializeJson(doc["dw"], jsonString);  // dW를 문자열로 변환하여 출력
+          Serial.println("dw 배열: " + jsonString);  // dw 배열 확인 출력
+          // JsonArray에서 값이 잘 추출되고 있는지 확인
+          Serial.println("dw 배열 크기: " + String(days.size()));  // dw 배열 크기 확인
+          for (int i = 0; i < days.size(); i++) {
+              int day = days[i];
+              Serial.println("########## day: " + String(day));  // day 값 확인
+              addTimeSlot(pinIndex, startHour, startMinute, endHour, endMinute, repeatMode, day);
+          }
+        } else {
+          // "dW"가 JsonArray가 아닌 경우
+          Serial.println("Error: dW is not a JsonArray");
+        }
+      } else if (repeatMode == "daily") {
+        // "rm"이 "d"일 경우 dw 배열을 무시하고 기본 처리
+        Serial.println("rm is 'd', ignoring dw array");
+        addTimeSlot(pinIndex, startHour, startMinute, endHour, endMinute, repeatMode, -1); // "d"일 경우 -1로 처리
+      }
+      saveTimeSlotsToSPIFFS(pinIndex); // SPIFFS 저장
+      Serial.println("✅ Time slot added and saved to SPIFFS: " + String(pinIndex));
+      startSendingTimeSlots(pinIndex);  // 목록 전송
+    }
+
+    else if (oper == "delete") {
+      int slotIndex = doc["sI"] | -1;
       if (slotIndex >= 0 && slotIndex < timeSlots[pinIndex].size()) {
         removeTimeSlot(pinIndex, slotIndex);
-        saveTimeSlotsToSPIFFS(pinIndex); // 타임슬롯 변경 시 SPIFFS에 저장
+        saveTimeSlotsToSPIFFS(pinIndex);
         Serial.println("Time slot removed and saved to SPIFFS");
         startSendingTimeSlots(pinIndex);
-      }
-      else {
+      } else {
         Serial.println("Invalid slot index.");
       }
     }
+
     else if (oper == "deleteAll") {
       removeAllTimeSlots(pinIndex);
-      saveTimeSlotsToSPIFFS(pinIndex); // 모든 타임슬롯 삭제 후 SPIFFS에 저장
+      saveTimeSlotsToSPIFFS(pinIndex);
       Serial.println("All time slots removed for pin " + String(pinIndex));
     }
+
     else if (oper == "list") {
-      Serial.println("Time slots list request received for pin " + String(pinIndex));
-      startSendingTimeSlots(pinIndex);
+      startSendingTimeSlots(pinIndex);  // 타임 슬롯 전송
     }
   }
-  
-  else if (order == 5) {
-    String oper = doc["oper"] | "";
-    if (oper == "save") {
-      int portNo = doc["portNo"] | -1;
-      JsonArray portStates = doc["portState"].as<JsonArray>();
-
-      if (portNo >= 0 && portNo < (numberOfPins+2)) {
-        dev.pinStateChanges[portNo][0].clear();  // 기존 데이터를 초기화
-        dev.pinStateChanges[portNo][1].clear();  // 기존 데이터를 초기화
-
-        int index = 0; // 배열 인덱스 변수
-
-        for (JsonObject portState : portStates) {
-          String mac = portState["mac"] | "";
-          int port = portState["port"] | -1;
-          bool value = portState["value"] | false;
-
-          Serial.println("mac:" + mac + "  port: " + String(port) + "  value: " + String(value));
-          // PinStateChange 객체 생성 및 데이터 설정
-          PinStateChange change;
-          change.mac = mac;
-          change.port = port;
-          change.value = value;
-          change.timestamp = millis();
-
-          // 인덱스에 따라 pinStateChanges에 저장
-          dev.pinStateChanges[portNo][index].push_back(change);
-
-          index++;
-        }
-
-        // 데이터 SPIFFS에 저장
-        DynamicJsonDocument saveDoc(2048);
-        JsonArray changesArray = saveDoc.createNestedArray("changes");
-
-        for (const auto& ch : dev.pinStateChanges[portNo][0]) {
-          JsonObject obj = changesArray.createNestedObject();
-          obj["mac"] = ch.mac;
-          obj["port"] = ch.port;
-          obj["value"] = ch.value;
-          obj["timestamp"] = ch.timestamp;
-        }
-
-        for (const auto& ch : dev.pinStateChanges[portNo][1]) {
-          JsonObject obj = changesArray.createNestedObject();
-          obj["mac"] = ch.mac;
-          obj["port"] = ch.port;
-          obj["value"] = ch.value;
-          obj["timestamp"] = ch.timestamp;
-        }
-
-        String saveData;
-        serializeJson(saveDoc, saveData);
-        String fileName = "/pinState_" + String(portNo) + ".json";
-        Serial.println("fileName : " + fileName);
-        File file = SPIFFS.open(fileName, FILE_WRITE);
-        if (!file) {
-          Serial.println("Failed to open file for writing");
-          return;
-        }
-        file.print(saveData);
-        file.close();
-        //Serial.println("Data saved to SPIFFS: " + saveData);
-      }
-    }
-    else if (oper == "list") {
-      int port = doc["portNo"] | -1;
-      if (port >= 0 && port < numberOfPins) {
-        DynamicJsonDocument responseDoc(2048);
-        responseDoc["order"] = 6;
-        responseDoc["mac"] = dev.mac;
-        responseDoc["portNo"] = port;
-        JsonArray portStates = responseDoc.createNestedArray("portState");
-
-        for (const auto& change : dev.pinStateChanges[port][0]) {
-          JsonObject obj = portStates.createNestedObject();
-          obj["mac"] = change.mac;
-          obj["port"] = change.port;
-          obj["value"] = change.value;
-        }
-        
-        for (const auto& change : dev.pinStateChanges[port][1]) {
-          JsonObject obj = portStates.createNestedObject();
-          obj["mac"] = change.mac;
-          obj["port"] = change.port;
-          obj["value"] = change.value;
-        }
-
-        String output;
-        serializeJson(responseDoc, output);
-        client.publish(wifi.outTopic, output.c_str());
-        Serial.println("MQTT message sent: " + output);
-      } else {
-        Serial.println("Invalid port number: " + String(port));
-      }
-    }
-    else if (oper == "delete") {
-      int port = doc["portNo"] | -1;
-      if (port >= 0 && port < numberOfPins) {
-        dev.pinStateChanges[port][0].clear();
-        dev.pinStateChanges[port][1].clear();
-        
-        PinStateChange defaultChange;
-        defaultChange.mac = "";
-        defaultChange.port = -1;
-        defaultChange.value = false;
-        defaultChange.timestamp = 0;
-
-        dev.pinStateChanges[port][0].push_back(defaultChange);
-        dev.pinStateChanges[port][1].push_back(defaultChange);
-
-        Serial.println("Deleted pinStateChanges for port " + String(port));
-
-        // 데이터 SPIFFS에 저장
-        DynamicJsonDocument saveDoc(2048);
-        JsonArray changesArray = saveDoc.createNestedArray("changes");
-
-        for (const auto& ch : dev.pinStateChanges[port][0]) {
-          JsonObject obj = changesArray.createNestedObject();
-          obj["mac"] = ch.mac;
-          obj["port"] = ch.port;
-          obj["value"] = ch.value;
-          obj["timestamp"] = ch.timestamp;
-        }
-
-        for (const auto& ch : dev.pinStateChanges[port][1]) {
-          JsonObject obj = changesArray.createNestedObject();
-          obj["mac"] = ch.mac;
-          obj["port"] = ch.port;
-          obj["value"] = ch.value;
-          obj["timestamp"] = ch.timestamp;
-        }
-
-        String saveData;
-        serializeJson(saveDoc, saveData);
-        String fileName = "/pinState_" + String(port) + ".json";
-        Serial.println("fileName : " + fileName);
-        File file = SPIFFS.open(fileName, FILE_WRITE);
-        if (!file) {
-          Serial.println("Failed to open file for writing");
-          return;
-        }
-        file.print(saveData);
-        file.close();
-        Serial.println("Data saved to SPIFFS: " + saveData);
-      } else {
-        Serial.println("Invalid port number: " + String(port));
-      }
-    }
-    
-  }
-  
+  return;
 }
+
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(TRIGGER_PIN, INPUT_PULLUP);
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, HIGH);
+
+  // SPIFFS 먼저
+  if (!SPIFFS.begin()) {
+    Serial.println("❌ SPIFFS 초기화 실패 → 포맷 후 재시도");
+    if (SPIFFS.format() && SPIFFS.begin()) {
+      Serial.println("✅ SPIFFS 재마운트 성공");
+    } else {
+      Serial.println("💥 SPIFFS 치명적 오류");
+    }
+  }
+  
+  config.loadConfigFromSPIFFS();
+
+  if (wifi.ssid.isEmpty()) {
+    Serial.println("Bluetooth 셋업");
+    ble.setup();
+    // BLE이 제대로 초기화될 수 있도록 약간의 시간을 기다립니다.
+    delay(1000);
+    Serial.println("BLE ready!");
+    return;
+  }
+  wifi.connectToWiFi();
+
+  // Set each output pin as an output
+  for (int i = 0; i <numberOfPins; i++) {
+    pinMode(outputPins[i], OUTPUT);
+  }
+  // Set each input pin as an input
+  for (int i = 0; i < numberOfPins; i++) {
+    pinMode(inputPins[i], INPUT);
+  }
+
+
+  // ✅ PendingOutputs 로드 추가
+  for (int i = 0; i < numberOfPins; i++) {
+    config.loadPendingOutputsFromFile(i);  // 이 함수를 실행하면 에러가 발생해요
+  }
+
+  // MQTT 설정
+  client.setServer(wifi.mqttBroker.c_str(), 1883);
+  client.setCallback(callback);
+  wifi.startupTime = millis();
+  wifi.reconnectMQTT();
+
+  timeManager.setup();
+
+  // Load pin states from SPIFFS
+  dev.loadPinStatesFromSPIFFS();
+  
+  // setup이 끝나는 시점에서 메모리 사용량 출력
+  Serial.print("Free heap memory after setup: ");
+  Serial.println(esp_get_free_heap_size());
+}
+
 
 void loop() {
   if(!ble.boot) {
@@ -1354,3 +1640,5 @@ void loop() {
   }
   dev.checkFactoryDefault();
 }
+
+
