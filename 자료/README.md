@@ -8,7 +8,7 @@
 리포지토리 내 '자료' 폴더에 포함된 이미지들입니다.
 ### 1. 보드 실물 사진
 <img src="https://github.com/kdi6033/i2r-02/blob/main/%EC%9E%90%EB%A3%8C/i2r-02.png" width="400px" alt="i2r-02.png">
-<img src="https://github.com/kdi6033/i2r-02/blob/main/%EC%9E%90%EB%A3%8C/i2r-02－１.png" width="400px" alt="i2r-02－１.png">
+<img src="https://github.com/kdi6033/i2r-02/blob/main/%EC%9E%90%EB%A3%8C/i2r-02-１.png" width="400px" alt="i2r-02-１.png">
 ### 2. 핀 맵 (Pin Connection)
 보드 제어를 위한 핀 연결 정보입니다.
 <img src="https://github.com/kdi6033/i2r-02/blob/main/%EC%9E%90%EB%A3%8C/i2r-02%20pin%EC%97%B0%EA%B2%B0.png" width="400px" alt="핀 연결도">
