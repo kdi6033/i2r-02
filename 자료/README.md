@@ -13,7 +13,7 @@
 ### 2. 핀 맵 (Pin Connection)
 보드 제어를 위한 핀 연결 정보입니다.
 ![핀 연결도](https://github.com/kdi6033/i2r-02/blob/main/%EC%9E%90%EB%A3%8C/i2r-02%20pin%EC%97%B0%EA%B2%B0.png)
-
+<img src="https://github.com/kdi6033/i2r-02/blob/main/%EC%9E%90%EB%A3%8C/i2r-02%20pin%EC%97%B0%EA%B2%B0.png" width="400px" alt="핀 연결도">
 ---
 
 ## 📂 주요 파일 설명
